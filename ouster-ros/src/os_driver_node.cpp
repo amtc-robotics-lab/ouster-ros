@@ -72,6 +72,11 @@ class OusterDriver : public OusterSensor {
                 info, tf_bcast.imu_frame_id(), timestamp_mode,
                 static_cast<int64_t>(ptp_utc_tai_offset * 1e+9));
         }
+        if (impl::check_token(tokens, "HEARTBEAT")) {
+            heartbeat_pub =
+                create_publisher<builtin_interfaces::msg::Time>("heartbeat", selected_qos);
+        }
+
 
         int num_returns = get_n_returns(info);
 
@@ -89,6 +94,8 @@ class OusterDriver : public OusterSensor {
                     tf_bcast.point_cloud_frame_id(), tf_bcast.apply_lidar_to_sensor_transform(),
                     [this](PointCloudProcessor_OutputType msgs) {
                         for (size_t i = 0; i < msgs.size(); ++i) lidar_pubs[i]->publish(*msgs[i]);
+                        builtin_interfaces::msg::Time heartbeat_msg( now());
+                        heartbeat_pub->publish(heartbeat_msg);
                     }
                 )
             );
@@ -185,6 +192,7 @@ class OusterDriver : public OusterSensor {
         imu_packet_handler = nullptr;
         lidar_packet_handler = nullptr;
         imu_pub.reset();
+        heartbeat_pub.reset();
         for (auto p : lidar_pubs) p.reset();
         for (auto p : scan_pubs) p.reset();
         for (auto p : image_pubs) p.second.reset();
@@ -195,6 +203,8 @@ class OusterDriver : public OusterSensor {
     OusterStaticTransformsBroadcaster<rclcpp_lifecycle::LifecycleNode> tf_bcast;
 
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub;
+    rclcpp::Publisher<builtin_interfaces::msg::Time>::SharedPtr heartbeat_pub;
+
     std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
         lidar_pubs;
     std::vector<rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr>

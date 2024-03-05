@@ -20,6 +20,7 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 
 #include <chrono>
 #include <string>

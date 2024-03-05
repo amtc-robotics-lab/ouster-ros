@@ -14,6 +14,7 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 
 #include "ouster_sensor_msgs/msg/packet_msg.hpp"
 #include "ouster_ros/os_processing_node_base.h"
@@ -167,6 +168,7 @@ class OusterCloud : public OusterProcessingNodeBase {
    private:
     rclcpp::Subscription<PacketMsg>::SharedPtr imu_packet_sub;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr status_pub;
 
     rclcpp::Subscription<PacketMsg>::SharedPtr lidar_packet_sub;
     std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
