@@ -95,7 +95,9 @@ class OusterDriver : public OusterSensor {
                     [this](PointCloudProcessor_OutputType msgs) {
                         for (size_t i = 0; i < msgs.size(); ++i) lidar_pubs[i]->publish(*msgs[i]);
                         builtin_interfaces::msg::Time heartbeat_msg( now());
-                        heartbeat_pub->publish(heartbeat_msg);
+                        if (heartbeat_pub) {
+                            heartbeat_pub->publish(heartbeat_msg);
+                        }
                     }
                 )
             );
