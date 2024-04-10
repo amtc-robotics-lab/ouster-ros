@@ -74,7 +74,7 @@ class OusterDriver : public OusterSensor {
         }
         if (impl::check_token(tokens, "HEARTBEAT")) {
             heartbeat_pub =
-                create_publisher<builtin_interfaces::msg::Time>("heartbeat", selected_qos);
+                create_publisher<builtin_interfaces::msg::Time>("heartbeat", rclcpp::SystemDefaultsQoS());
         }
 
 
