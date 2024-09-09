@@ -31,9 +31,10 @@ endif()
 option(CMAKE_POSITION_INDEPENDENT_CODE "Build position independent code." ON)
 
 set(_ouster_ros_INCLUDE_DIRS
-  include
-  ouster-sdk/ouster_client/include
-  ouster-sdk/ouster_client/include/optional-lite
+  "include;"
+  "ouster-sdk/ouster_client/include;"
+  "ouster-sdk/ouster_client/include/optional-lite;"
+  "ouster-sdk/ouster_pcap/include"
 )
 
 # ==== Libraries ====
@@ -54,6 +55,11 @@ include_directories(${_ouster_ros_INCLUDE_DIRS})
 
 # use only MPL-licensed parts of eigen
 add_definitions(-DEIGEN_MPL2_ONLY)
+
+set(OUSTER_TARGET_LINKS ouster_client)
+if (BUILD_PCAP)
+  list(APPEND OUSTER_TARGET_LINKS ouster_pcap)
+endif()
 
 add_library(ouster_ros_library SHARED
   src/os_ros.cpp
@@ -78,7 +84,7 @@ target_link_libraries(ouster_ros_library
     ouster_build
     pcl_common
   # PRIVATE (unsupported)
-  -Wl,--whole-archive ouster_client -Wl,--no-whole-archive
+  -Wl,--whole-archive ${OUSTER_TARGET_LINKS} -Wl,--no-whole-archive
 )
 
 # helper method to construct ouster-ros components
@@ -165,12 +171,26 @@ rclcpp_components_register_node(os_driver_component
 )
 
 
+if (BUILD_PCAP)
+# ==== os_replay_component ====
+create_ros2_component(os_pcap_component
+  "src/os_sensor_node_base.cpp;src/os_pcap_node.cpp"
+  ""
+)
+rclcpp_components_register_node(os_pcap_component
+  PLUGIN "ouster_ros::OusterPcap"
+  EXECUTABLE os_pcap
+)
+endif()
+
 # ==== Test ====
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(${PROJECT_NAME}_test
-    test/ring_buffer_test.cpp
     src/os_ros.cpp
+    test/test_main.cpp
+    test/ring_buffer_test.cpp
+    test/lock_free_ring_buffer_test.cpp
     test/point_accessor_test.cpp
     test/point_transform_test.cpp
     test/point_cloud_compose_test.cpp
@@ -189,14 +209,21 @@ endif()
 
 
 # ==== Install ====
+set(OUSTER_INSTALL_TARGETS
+  ouster_ros_library
+  os_sensor_component
+  os_replay_component
+  os_cloud_component
+  os_image_component
+  os_driver_component
+)
+if (BUILD_PCAP)
+  list(APPEND OUSTER_INSTALL_TARGETS os_pcap_component)
+endif()
+
 install(
   TARGETS
-    ouster_ros_library
-    os_sensor_component
-    os_replay_component
-    os_cloud_component
-    os_image_component
-    os_driver_component
+    ${OUSTER_INSTALL_TARGETS}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin

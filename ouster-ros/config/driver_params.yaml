@@ -31,9 +31,10 @@ ouster/os_driver:
     ptp_utc_tai_offset: -37.0
     # udp_profile_lidar[optional]: lidar packet profile; possible values:
     # - LEGACY: not recommended
-    # - RNG19_RFL8_SIG16_NIR16_DUAL
     # - RNG19_RFL8_SIG16_NIR16
     # - RNG15_RFL8_NIR8
+    # - RNG19_RFL8_SIG16_NIR16_DUAL
+    # - FUSA_RNG15_RFL8_NIR8_DUAL
     udp_profile_lidar: ''
     # metadata[optional]: path to save metadata file to, if left empty a file
     # with the sensor hostname or ip will be crearted in ~/.ros folder.
@@ -86,3 +87,18 @@ ouster/os_driver:
     # - ouster_ros/sensor_point_types.h
     # - ouster_ros/common_point_types.h.
     point_type: original
+    # azimuth window start[optional]: values range [0, 360000] millidegrees
+    azimuth_window_start: 0
+    # azimuth_window_end[optional]: values range [0, 360000] millidegrees
+    azimuth_window_end: 360000
+    # persist_config[optional]: request the sensor to persist settings
+    persist_config: false
+    # attempt_config[optional]: attempting to reconnect to the sensor after
+    # connection loss or sensor powered down
+    attempt_reconnect: false
+    # dormant_period_between_reconnects[optional]: wait time in seconds between
+    # reconnection attempts
+    dormant_period_between_reconnects: 1.0
+    # max_failed_reconnect_attempts[optional]: maximum number of attempts trying
+    # to communicate with the sensor. Counter resets upon successful connection.
+    max_failed_reconnect_attempts: 2147483647
