@@ -18,17 +18,18 @@
 #include <chrono>
 #include <iomanip>
 
+#include <lifecycle_msgs/msg/transition.hpp>
+#include <lifecycle_msgs/srv/change_state.hpp>
 #include "ouster_sensor_msgs/msg/packet_msg.h"
 #include "ouster_ros/os_sensor_node_base.h"
 #include "ouster_ros/visibility_control.h"
 
-#include "thread_safe_ring_buffer.h"
 #include <ouster/os_pcap.h>
 
+using namespace std::chrono;
+using namespace std::chrono_literals;
 namespace sensor = ouster::sensor;
 using ouster::sensor_utils::PcapReader;
-using namespace std::chrono;
-
 using ouster_sensor_msgs::msg::PacketMsg;
 
 namespace ouster_ros {
@@ -37,17 +38,37 @@ class OusterPcap : public OusterSensorNodeBase {
    public:
     OUSTER_ROS_PUBLIC
     explicit OusterPcap(const rclcpp::NodeOptions& options)
-        : OusterSensorNodeBase("os_pcap", options) {
+        : OusterSensorNodeBase("os_pcap", options)
+    {
         declare_parameters();
+        bool auto_start = get_parameter("auto_start").as_bool();
+
+        if (auto_start) {
+            RCLCPP_INFO(get_logger(), "auto start requested");
+            auto request_transitions = std::vector<uint8_t>{
+                lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE,
+                lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE};
+            execute_transitions_sequence(request_transitions, 0);
+            RCLCPP_INFO(get_logger(), "auto start initiated");
+        }
+    }
+
+    ~OusterPcap() override {
+        RCLCPP_DEBUG(get_logger(), "OusterPcap::~OusterPcap() is called.");
+        stop_packet_read_thread();
     }
 
     LifecycleNodeInterface::CallbackReturn on_configure(
         const rclcpp_lifecycle::State&) {
-        RCLCPP_INFO(get_logger(), "on_configure() is called.");
+        RCLCPP_DEBUG(get_logger(), "on_configure() is called.");
 
         try {
             auto meta_file = get_meta_file();
             auto pcap_file = get_pcap_file();
+            loop = get_parameter("loop").as_bool();
+            progress_update_freq = get_parameter("progress_update_freq").as_double();
+            if (progress_update_freq < 0.001)
+                progress_update_freq = 0.001;
             create_metadata_pub();
             load_metadata_from_file(meta_file);
             open_pcap(pcap_file);
@@ -71,10 +92,7 @@ class OusterPcap : public OusterSensorNodeBase {
         RCLCPP_DEBUG(get_logger(), "on_activate() is called.");
         LifecycleNode::on_activate(state);
         create_publishers();
-        if (imu_packet_pub) imu_packet_pub->on_activate();
-        if (lidar_packet_pub) lidar_packet_pub->on_activate();
         allocate_buffers();
-        start_packet_processing_threads();
         start_packet_read_thread();
         return LifecycleNodeInterface::CallbackReturn::SUCCESS;
     }
@@ -90,6 +108,7 @@ class OusterPcap : public OusterSensorNodeBase {
         const rclcpp_lifecycle::State& state) {
         RCLCPP_DEBUG(get_logger(), "on_deactivate() is called.");
         LifecycleNode::on_deactivate(state);
+        stop_packet_read_thread();
         return LifecycleNodeInterface::CallbackReturn::SUCCESS;
     }
 
@@ -129,8 +148,11 @@ class OusterPcap : public OusterSensorNodeBase {
     }
 
     void declare_parameters() {
+        declare_parameter("auto_start", true);
         declare_parameter<std::string>("metadata");
         declare_parameter<std::string>("pcap_file");
+        declare_parameter("loop", false);
+        declare_parameter("progress_update_freq", 1.0);
         declare_parameter("use_system_default_qos", false);
     }
 
@@ -169,21 +191,13 @@ class OusterPcap : public OusterSensorNodeBase {
 
     void allocate_buffers() {
         auto& pf = sensor::get_format(info);
-
         lidar_packet.buf.resize(pf.lidar_packet_size);
-        // TODO: gauge necessary queue size for lidar packets
-        lidar_packets =
-            std::make_unique<ThreadSafeRingBuffer>(pf.lidar_packet_size, 1024);
-
         imu_packet.buf.resize(pf.imu_packet_size);
-        // TODO: gauge necessary queue size for lidar packets
-        imu_packets =
-            std::make_unique<ThreadSafeRingBuffer>(pf.imu_packet_size, 1024);
     }
 
     void create_publishers() {
-    bool use_system_default_qos =
-        get_parameter("use_system_default_qos").as_bool();
+        bool use_system_default_qos =
+            get_parameter("use_system_default_qos").as_bool();
         rclcpp::QoS system_default_qos = rclcpp::SystemDefaultsQoS();
         rclcpp::QoS sensor_data_qos = rclcpp::SensorDataQoS();
         auto selected_qos =
@@ -201,11 +215,13 @@ class OusterPcap : public OusterSensorNodeBase {
         packet_read_active = true;
         packet_read_thread = std::make_unique<std::thread>([this]() {
             auto& pf = sensor::get_format(info);
-            while (packet_read_active) {
+            do {
                 read_packets(*pcap, pf);
-            }
+                pcap->reset();
+            } while(rclcpp::ok() && packet_read_active && loop);
             RCLCPP_DEBUG(get_logger(),
                          "packet_read_thread done.");
+            rclcpp::shutdown();
         });
     }
 
@@ -214,45 +230,6 @@ class OusterPcap : public OusterSensorNodeBase {
         if (packet_read_thread->joinable()) {
             packet_read_active = false;
             packet_read_thread->join();
-        }
-    }
-
-    void start_packet_processing_threads() {
-        imu_packets_processing_thread_active = true;
-        imu_packets_processing_thread = std::make_unique<std::thread>([this]() {
-            while (imu_packets_processing_thread_active) {
-                imu_packets->read([this](const uint8_t* buffer) {
-                    on_imu_packet_msg(buffer);
-                });
-            }
-            RCLCPP_DEBUG(get_logger(), "imu_packets_processing_thread done.");
-        });
-
-        lidar_packets_processing_thread_active = true;
-        lidar_packets_processing_thread =
-            std::make_unique<std::thread>([this]() {
-                while (lidar_packets_processing_thread_active) {
-                    lidar_packets->read([this](const uint8_t* buffer) {
-                        on_lidar_packet_msg(buffer);
-                    });
-                }
-
-                RCLCPP_DEBUG(get_logger(),
-                             "lidar_packets_processing_thread done.");
-            });
-    }
-
-    void stop_packet_processing_threads() {
-        RCLCPP_DEBUG(get_logger(), "stopping packet processing threads.");
-
-        if (imu_packets_processing_thread->joinable()) {
-            imu_packets_processing_thread_active = false;
-            imu_packets_processing_thread->join();
-        }
-
-        if (lidar_packets_processing_thread->joinable()) {
-            lidar_packets_processing_thread_active = false;
-            lidar_packets_processing_thread->join();
         }
     }
 
@@ -281,23 +258,18 @@ class OusterPcap : public OusterSensorNodeBase {
         auto packet_info = pcap.current_info();
         auto file_start = packet_info.timestamp;
         auto last_update = file_start;
-        using namespace std::chrono_literals;
-        const auto UPDATE_PERIOD = duration_cast<microseconds>(1s);
+        const auto UPDATE_PERIOD = duration_cast<microseconds>(1s / progress_update_freq);
 
-        while (payload_size) {
+        while (rclcpp::ok() && packet_read_active && payload_size) {
             auto start = high_resolution_clock::now();
             if (packet_info.dst_port == info.config.udp_port_imu) {
-                imu_packets->write_overwrite(
-                    [this, &pcap, &pf, &packet_info](uint8_t* buffer) {
-                        std::memcpy(buffer, pcap.current_data(),
-                                    pf.imu_packet_size);
-                    });
+                std::memcpy(imu_packet.buf.data(), pcap.current_data(),
+                            pf.imu_packet_size);
+                imu_packet_pub->publish(imu_packet);
             } else if (packet_info.dst_port == info.config.udp_port_lidar) {
-                lidar_packets->write_overwrite(
-                    [this, &pcap, &pf, &packet_info](uint8_t* buffer) {
-                        std::memcpy(buffer, pcap.current_data(),
-                                    pf.lidar_packet_size);
-                    });
+                std::memcpy(lidar_packet.buf.data(), pcap.current_data(),
+                            pf.lidar_packet_size);
+                lidar_packet_pub->publish(lidar_packet);
             } else {
                 RCLCPP_WARN_STREAM_THROTTLE(get_logger(), *get_clock(), 1,
                     "unknown packet /w port:" << packet_info.dst_port);
@@ -325,22 +297,12 @@ class OusterPcap : public OusterSensorNodeBase {
     std::shared_ptr<PcapReader> pcap;
     ouster_sensor_msgs::msg::PacketMsg lidar_packet;
     ouster_sensor_msgs::msg::PacketMsg imu_packet;
-    rclcpp_lifecycle::LifecyclePublisher<ouster_sensor_msgs::msg::PacketMsg>::SharedPtr
-        lidar_packet_pub;
-    rclcpp_lifecycle::LifecyclePublisher<ouster_sensor_msgs::msg::PacketMsg>::SharedPtr
-        imu_packet_pub;
-
-    std::unique_ptr<ThreadSafeRingBuffer> lidar_packets;
-    std::unique_ptr<ThreadSafeRingBuffer> imu_packets;
-
+    rclcpp::Publisher<ouster_sensor_msgs::msg::PacketMsg>::SharedPtr lidar_packet_pub;
+    rclcpp::Publisher<ouster_sensor_msgs::msg::PacketMsg>::SharedPtr imu_packet_pub;
+    bool loop;
+    double progress_update_freq;
     std::atomic<bool> packet_read_active = {false};
     std::unique_ptr<std::thread> packet_read_thread;
-
-    std::atomic<bool> imu_packets_processing_thread_active = {false};
-    std::unique_ptr<std::thread> imu_packets_processing_thread;
-
-    std::atomic<bool> lidar_packets_processing_thread_active = {false};
-    std::unique_ptr<std::thread> lidar_packets_processing_thread;
 };
 
 }  // namespace ouster_ros
