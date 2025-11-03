@@ -25,7 +25,7 @@ find_package(tf2_eigen REQUIRED)
 # ==== Options ====
 add_compile_options(-Wall -Wextra)
 if(NOT DEFINED CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 option(CMAKE_POSITION_INDEPENDENT_CODE "Build position independent code." ON)
